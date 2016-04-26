@@ -212,7 +212,7 @@ class NoPatchExtension(Extension):
             base.__init__(self, *args, **kwargs)
         else:
             Extension.__init__(self, *args, **kwargs)
-        
+
 
 class build_extensions(build_ext):
 
@@ -306,18 +306,29 @@ On OSX, via homebrew:
         if try_cython:
             try:
                 from Cython.Build import cythonize
-                cython_candidates = ['cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
-                                     'pool', 'protocol', 'query', 'util']
+                # cython_candidates = ['cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
+                #                      'pool', 'protocol', 'query', 'util']
                 compile_args = [] if is_windows else ['-Wno-unused-function']
+                # self.extensions.extend(cythonize(
+                #     [Extension('cassandra.%s' % m, ['cassandra/%s.py' % m],
+                #                extra_compile_args=compile_args)
+                #         for m in cython_candidates],
+                #     nthreads=build_concurrency,
+                #     exclude_failures=True))
+
                 self.extensions.extend(cythonize(
-                    [Extension('cassandra.%s' % m, ['cassandra/%s.py' % m],
-                               extra_compile_args=compile_args)
-                        for m in cython_candidates],
+                    [Extension('cassandra.ccluster', ['cassandra/ccluster.pyx'], libraries=['cassandra'],
+                               extra_compile_args=compile_args),
+                     Extension('cassandra.io.libevreactorv2', ['cassandra/io/libevreactorv2.pyx'], libraries=['cassandra'],
+                               extra_compile_args=compile_args)],
                     nthreads=build_concurrency,
                     exclude_failures=True))
 
-                self.extensions.extend(cythonize(NoPatchExtension("*", ["cassandra/*.pyx"], extra_compile_args=compile_args),
-                                                 nthreads=build_concurrency))
+                # cython_files = ['cassandra/bytesio.pyx', 'cassandra/cython_marshal.pyx', 'cassandra/cython_utils.pyx', 'cassandra/deserializers.pyx'
+                #                 'cassandra/ioutils.pyx', 'cassandra/numpy_parser.pyx', 'cassandra/obj_parser.pyx', 'cassandra/parsing.pyx', 'cassandra/row_parser.pyx']
+                # self.extensions.extend(cythonize(NoPatchExtension("*", cython_files, extra_compile_args=compile_args),
+                #                                  nthreads=build_concurrency))
+
             except Exception:
                 sys.stderr.write("Failed to cythonize one or more modules. These will not be compiled as extensions (optional).\n")
 
@@ -396,6 +407,8 @@ def run_setup(extensions):
 
     if not PY3:
         dependencies.append('futures')
+
+    from Cython.Build import cythonize
 
     setup(
         name='cassandra-driver',

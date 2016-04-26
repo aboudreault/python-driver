@@ -73,6 +73,7 @@ from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              BatchStatement, bind_params, QueryTrace,
                              named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET)
 
+from cassandra.ccluster import ClusterImpl
 
 def _is_eventlet_monkey_patched():
     if 'eventlet.patcher' not in sys.modules:
@@ -183,7 +184,7 @@ else:
         return DCAwareRoundRobinPolicy()
 
 
-class Cluster(object):
+class Cluster(ClusterImpl):
     """
     The main class to use when interacting with a Cassandra cluster.
     Typically, one instance of this class will be created for each
@@ -573,6 +574,8 @@ class Cluster(object):
         Any of the mutable Cluster attributes may be set as keyword arguments
         to the constructor.
         """
+        super(Cluster, self).__init__()
+
         if contact_points is not None:
             if isinstance(contact_points, six.string_types):
                 raise TypeError("contact_points should not be a string, it should be a sequence (e.g. list) of strings")
@@ -1696,6 +1699,7 @@ class Session(object):
 
         future = self._create_response_future(query, parameters, trace, custom_payload, timeout)
         future._protocol_handler = self.client_protocol_handler
+        #self.cluster.execute_message(str(query))
         future.send_request()
         return future
 
@@ -2822,6 +2826,8 @@ class ResponseFuture(object):
         """ Internal """
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
+        self.session.cluster.execute_message(self)
+        return
         start = time.time()
         for host in self.query_plan:
             req_id = self._query(host)
@@ -3540,4 +3546,3 @@ class ResultSet(object):
             return row[0]
         else:
             return row['[applied]']
-

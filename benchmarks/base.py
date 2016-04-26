@@ -57,7 +57,7 @@ except ImportError as exc:
     log.exception("Error importing twisted")
     pass
 
-KEYSPACE = "testkeyspace" + str(int(time.time()))
+KEYSPACE = "testkeyspace"
 TABLE = "testtable"
 
 COLUMN_VALUES = {
@@ -73,6 +73,7 @@ def setup(options):
     log.info("Using 'cassandra' package from %s", cassandra.__path__)
 
     cluster = Cluster(options.hosts, protocol_version=options.protocol_version)
+
     try:
         session = cluster.connect()
 
@@ -130,7 +131,6 @@ def benchmark(thread_class):
 
         log.debug("Sleeping for two seconds...")
         time.sleep(2.0)
-
 
         # Generate the query
         if options.read:
