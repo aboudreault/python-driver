@@ -318,8 +318,6 @@ On OSX, via homebrew:
 
                 self.extensions.extend(cythonize(
                     [Extension('cassandra.ccluster', ['cassandra/ccluster.pyx'], libraries=['cassandra'],
-                               extra_compile_args=compile_args),
-                     Extension('cassandra.io.libevreactorv2', ['cassandra/io/libevreactorv2.pyx'], libraries=['cassandra'],
                                extra_compile_args=compile_args)],
                     nthreads=build_concurrency,
                     exclude_failures=True))
@@ -329,7 +327,8 @@ On OSX, via homebrew:
                 # self.extensions.extend(cythonize(NoPatchExtension("*", cython_files, extra_compile_args=compile_args),
                 #                                  nthreads=build_concurrency))
 
-            except Exception:
+            except Exception as e:
+                print(e)
                 sys.stderr.write("Failed to cythonize one or more modules. These will not be compiled as extensions (optional).\n")
 
 
@@ -407,8 +406,6 @@ def run_setup(extensions):
 
     if not PY3:
         dependencies.append('futures')
-
-    from Cython.Build import cythonize
 
     setup(
         name='cassandra-driver',
