@@ -88,6 +88,14 @@ cdef class CCluster2(object):
             print('error: {0}'.format(rc))
 
 
+cdef void on_result(CassFuture* future, void* data) with gil:
+    with nogil:
+        cass_future_get_result(future)
+    response = ResultMessage(1,  None)
+    (<object>data)._set_result(response)
+    (<object>data)._event.set()
+
+
 cdef class ClusterImpl(object):
     cdef ccluster.CassCluster* _cluster
     cdef ccluster.CassSession* _session
@@ -139,8 +147,5 @@ cdef class ClusterImpl(object):
             statement = cass_statement_new(query, 0)
             #cass_statement_set_serial_consistency(statement, ...)
             future_ = cass_session_execute(self._session, statement)
-            cass_future_wait(future_)
-        response = ResultMessage(1,  None)
-        future._set_result(response)
-        future._event.set()
-
+        cass_future_set_callback(future_, on_result, <void*>future)
+            #cass_future_wait(future_)

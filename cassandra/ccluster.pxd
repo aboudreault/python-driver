@@ -20,8 +20,10 @@ cdef extern from "cassandra.h":
     ctypedef struct CassCluster
     ctypedef struct CassSession
     ctypedef struct CassFuture
+    ctypedef struct CassResult
     ctypedef struct ResponseFuture
     ctypedef struct CassStatement
+    ctypedef void (*CassFutureCallback)(CassFuture* future, void* data)
 
     CassCluster* cass_cluster_new()
     CassSession* cass_session_new()
@@ -36,3 +38,5 @@ cdef extern from "cassandra.h":
     ResponseFuture*  cass_response_future_new(CassCluster* cluster)
 
     CassError cass_cluster_set_num_threads_io(CassCluster* cluster, unsigned num_threads) nogil
+    CassError cass_future_set_callback(CassFuture* future, CassFutureCallback callback, void* data) nogil
+    CassResult* cass_future_get_result(CassFuture* future) nogil
