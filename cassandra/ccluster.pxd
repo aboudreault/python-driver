@@ -16,6 +16,9 @@ cdef extern from "cassandra.h":
     ctypedef enum CassError:
         CASS_OK = 0
         #MORE_CODES...
+    ctypedef enum cass_bool_t:
+        cass_false = 0
+        cass_true = 1
 
     ctypedef struct CassCluster
     ctypedef struct CassSession
@@ -23,6 +26,11 @@ cdef extern from "cassandra.h":
     ctypedef struct CassResult
     ctypedef struct ResponseFuture
     ctypedef struct CassStatement
+    ctypedef struct CassResult
+    ctypedef struct CassIterator
+    ctypedef struct CassRow
+    ctypedef struct CassValue
+    ctypedef struct CassString
     ctypedef void (*CassFutureCallback)(CassFuture* future, void* data)
 
     CassCluster* cass_cluster_new()
@@ -38,5 +46,20 @@ cdef extern from "cassandra.h":
     ResponseFuture*  cass_response_future_new(CassCluster* cluster)
 
     CassError cass_cluster_set_num_threads_io(CassCluster* cluster, unsigned num_threads) nogil
+    CassError cass_cluster_set_max_requests_per_flush(CassCluster* cluster, unsigned num_requests)
+    CassError cass_cluster_set_write_bytes_high_water_mark(CassCluster* cluster, unsigned num_bytes)
+    CassError cass_cluster_set_write_bytes_low_water_mark(CassCluster* cluster, unsigned num_bytes)
+    CassError cass_cluster_set_pending_requests_high_water_mark(CassCluster* cluster, unsigned num_requests)
+    CassError cass_cluster_set_pending_requests_low_water_mark(CassCluster* cluster, unsigned num_requests)
+
+
     CassError cass_future_set_callback(CassFuture* future, CassFutureCallback callback, void* data) nogil
     CassResult* cass_future_get_result(CassFuture* future) nogil
+    CassIterator* cass_iterator_from_result(const CassResult* result) nogil
+    const CassRow* cass_iterator_get_row(const CassIterator* iterator) nogil
+    cass_bool_t cass_iterator_next(CassIterator* iterator) nogil
+    size_t cass_result_row_count(const CassResult* result) nogil
+    const char* cass_error_desc(CassError error) nogil
+    const CassValue* cass_row_get_column(const CassRow* row, size_t index) nogil
+    CassError cass_value_get_string(const CassValue* value, const char** output, size_t* output_size) nogil
+    CassError cass_cluster_set_queue_size_io(CassCluster* cluster, unsigned queue_size)

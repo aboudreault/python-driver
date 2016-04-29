@@ -65,6 +65,7 @@ cdef class CCluster2(object):
     def __cinit__(self):
         self._cluster = cass_cluster_new()
         cass_cluster_set_contact_points(self._cluster, "127.0.0.1")
+        cass_cluster_set_queue_size_io(self._cluster, 1000000)
         self._session = cass_session_new()
 
         cdef ccluster.CassFuture* future = cass_session_connect_keyspace(self._session, self._cluster, "testkeyspace")
@@ -89,11 +90,46 @@ cdef class CCluster2(object):
 
 
 cdef void on_result(CassFuture* future, void* data) with gil:
+    cdef const CassResult* result
+    cdef CassIterator* iterator
+    cdef const CassRow* row
+    cdef CassError rc
+    cdef const CassValue *value1, *value2, *value3
+    cdef const char* str1, *str2, *str3
+    cdef size_t str_size1, str_size2, str_size3
+    results = ([u'thekey', u'col0', u'col1'],)  # test purpose, I know what I'm parsing
+
     with nogil:
-        cass_future_get_result(future)
-    response = ResultMessage(1,  None)
-    (<object>data)._set_result(response)
-    (<object>data)._event.set()
+        result = cass_future_get_result(future)
+        rc = cass_future_error_code(future)
+        if rc != CASS_OK:
+            with gil:
+                print cass_error_desc(rc)
+                results = None
+        else:
+            # TESTING PURPOSE, row parsing...
+            iterator = cass_iterator_from_result(result)
+            while cass_iterator_next(iterator):
+                row = cass_iterator_get_row(iterator)
+                value1 = cass_row_get_column(row, 0)
+                value2 = cass_row_get_column(row, 1)
+                value3 = cass_row_get_column(row, 2)
+                cass_value_get_string(value1, &str1, &str_size1)
+                cass_value_get_string(value2, &str2, &str_size2)
+                cass_value_get_string(value3, &str3, &str_size3)
+                with gil:
+                    results += ([(<bytes>str1[:str_size1], <bytes>str2[:str_size2], <bytes>str3[:str_size3],)],)
+                #    print results
+                #string_value = cass_value_get_string(value2, &string_value)
+                #string_value = cass_value_get_string(value3, &string_value)
+
+    if results and len(results) < 2:
+        results = None
+
+    response = ResultMessage(2 if results else 1,  results)
+    pyfuture = (<object>data)
+    pyfuture._set_result(response)
+    pyfuture._event.set()
 
 
 cdef class ClusterImpl(object):
@@ -107,6 +143,11 @@ cdef class ClusterImpl(object):
         # test purpose, handle the session here.
         cass_cluster_set_contact_points(self._cluster, "127.0.0.1")
         cass_cluster_set_num_threads_io(self._cluster, 1)
+        #cass_cluster_set_max_requests_per_flush(self._cluster, 10000)
+        #cass_cluster_set_pending_requests_low_water_mark(self._cluster, 5000)
+        #cass_cluster_set_pending_requests_high_water_mark(self._cluster, 10000)
+        #cass_cluster_set_write_bytes_high_water_mark(self._cluster, 1000000)
+
         self._session = cass_session_new()
 
         cdef ccluster.CassFuture* future = cass_session_connect_keyspace(self._session, self._cluster, "testkeyspace")
@@ -117,28 +158,17 @@ cdef class ClusterImpl(object):
         else:
             print('all good bro, connected to cluster')
 
-    cpdef execute2(self, const char* query, futures):
-        cdef ccluster.CassStatement* statement
-        with nogil:
-            statement = cass_statement_new(query, 0)
-            future = cass_session_execute(self._session, statement)
-            cass_future_wait(future)
-
-            rc = cass_future_error_code(future)
-        if rc != CASS_OK:
-            print('error: {0}'.format(rc))
-
-    cpdef execute_message2(self, const char* query):
+    cpdef execute_message2(self, future):
         #cdef ccluster.ResponseFuture* response_future = cass_response_future_new(self._cluster)
-        #cdef const char* query = future.message.query
+        cdef const char* query = future.message.query
         with nogil:
             statement = cass_statement_new(query, 0)
             #cass_statement_set_serial_consistency(statement, ...)
             future_ = cass_session_execute(self._session, statement)
             cass_future_wait(future_)
-        #response = ResultMessage(1,  None)
-        #future._set_result(response)
-        #future._event.set()
+        response = ResultMessage(1,  None)
+        future._set_result(response)
+        future._event.set()
 
     cpdef execute_message(self, future):
         #cdef ccluster.ResponseFuture* response_future = cass_response_future_new(self._cluster)

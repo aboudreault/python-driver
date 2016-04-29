@@ -2826,8 +2826,8 @@ class ResponseFuture(object):
         """ Internal """
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
-        #self.session.cluster.execute_message(self)
-        #return
+        self.session.cluster.execute_message(self)
+        return
         start = time.time()
         for host in self.query_plan:
             req_id = self._query(host)
