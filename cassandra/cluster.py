@@ -28,6 +28,7 @@ import sys
 import time
 from threading import Lock, RLock, Thread, Event
 import warnings
+from multiprocessing import Process
 
 import six
 from six.moves import range
@@ -182,6 +183,33 @@ else:
     def default_lbp_factory():
         return DCAwareRoundRobinPolicy()
 
+
+class SessionWorker(Process):
+
+    def __init__(self, cluster, **kwargs):
+        super(SessionWorker, self).__init__(**kwargs)
+        self.cluster = cluster
+        #self.queue = Queue.PriorityQueue()
+
+    def run(self):
+        self.session = self.cluster.connect()
+
+        time.sleep(2)
+        import random
+        pk = random.randint(0, 10000)
+
+        futures = []
+        for i in range(200000):
+            future = self.session.execute_async("insert into testkeyspace.testtable (thekey, col0, col1) VALUES ('%s-%s', 'a', 'b')" % (pk, i))
+            futures.append(future)
+
+        for future in futures:
+            try:
+                future.result()
+            except:
+                pass  ## timeout ?
+
+        self.session.shutdown()
 
 class Cluster(object):
     """
@@ -588,7 +616,6 @@ class Cluster(object):
 
         self.compression = compression
         self.protocol_version = protocol_version
-        self.auth_provider = auth_provider
 
         if load_balancing_policy is not None:
             if isinstance(load_balancing_policy, type):
@@ -873,12 +900,17 @@ class Cluster(object):
             else:
                 raise DriverException("Cannot downgrade protocol version (%d) below minimum supported version: %d" % (new_version, MIN_SUPPORTED_VERSION))
 
+    def create_session_worker(self):
+        session_worker = SessionWorker(self)
+        return session_worker
+
     def connect(self, keyspace=None):
         """
         Creates and returns a new :class:`~.Session` object.  If `keyspace`
         is specified, that keyspace will be the default keyspace for
         operations on the ``Session``.
         """
+
         with self._lock:
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
