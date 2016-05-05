@@ -126,7 +126,7 @@ def benchmark(thread_class):
         if options.protocol_version:
             kwargs['protocol_version'] = options.protocol_version
         cluster = Cluster(options.hosts, **kwargs)
-        session = cluster.connect(options.keyspace)
+        session = None #cluster.connect(options.keyspace)
 
         log.debug("Sleeping for two seconds...")
         time.sleep(2.0)
@@ -154,7 +154,7 @@ def benchmark(thread_class):
         try:
             for i in range(options.threads):
                 thread = thread_class(
-                    i, session, query, values, per_thread,
+                    i, cluster, session, query, values, per_thread,
                     cluster.protocol_version, options.profile)
                 thread.daemon = True
                 threads.append(thread)
@@ -259,9 +259,10 @@ def parse_options():
 
 class BenchmarkThread(Thread):
 
-    def __init__(self, thread_num, session, query, values, num_queries, protocol_version, profile):
+    def __init__(self, thread_num, cluster, session, query, values, num_queries, protocol_version, profile):
         Thread.__init__(self)
         self.thread_num = thread_num
+        self.cluster = cluster
         self.session = session
         self.query = query
         self.values = values

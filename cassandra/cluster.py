@@ -28,7 +28,7 @@ import sys
 import time
 from threading import Lock, RLock, Thread, Event
 import warnings
-from multiprocessing import Process
+from multiprocessing import Process, Queue as MQueue
 
 import six
 from six.moves import range
@@ -186,30 +186,51 @@ else:
 
 class SessionWorker(Process):
 
+
     def __init__(self, cluster, **kwargs):
         super(SessionWorker, self).__init__(**kwargs)
         self.cluster = cluster
-        #self.queue = Queue.PriorityQueue()
+        self._stop = False
+        self.query_queue = MQueue(maxsize=256)
+        self.futures = Queue.Queue()
 
     def run(self):
         self.session = self.cluster.connect()
 
         time.sleep(2)
-        import random
-        pk = random.randint(0, 10000)
 
-        futures = []
-        for i in range(200000):
-            future = self.session.execute_async("insert into testkeyspace.testtable (thekey, col0, col1) VALUES ('%s-%s', 'a', 'b')" % (pk, i))
-            futures.append(future)
-
-        for future in futures:
+        while True:
             try:
-                future.result()
-            except:
-                pass  ## timeout ?
+                query = self.query_queue.get_nowait()
+                if query == 'STOP':
+                    self._stop = True
+                else:
+                    future = self.session.execute_async(query)
+                    self.futures.put_nowait(future)
+            except Queue.Empty:
+                time.sleep(1)  # use less cpu
 
-        self.session.shutdown()
+            if self._stop and self.query_queue.empty():
+                self.wait_futures()
+                self.session.shutdown()
+                break
+
+    def execute_async(self, query):
+        self.query_queue.put(query)  ## will block if the queue is full, test-purpose due to broken pipe when full throttle
+
+    def stop(self):
+        self.query_queue.put('STOP')  # test purpose
+        self.join()
+
+    def wait_futures(self):
+        while True:
+            try:
+                self.futures.get_nowait().result()
+            except Queue.Empty:
+                break
+            except:
+                pass  # ... operationtimeout
+
 
 class Cluster(object):
     """
