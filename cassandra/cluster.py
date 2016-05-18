@@ -18,6 +18,8 @@ This module houses the main classes you will interact with,
 """
 from __future__ import absolute_import
 
+import uuid
+
 import atexit
 from collections import defaultdict, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +30,7 @@ import sys
 import time
 from threading import Lock, RLock, Thread, Event
 import warnings
+from copy import copy
 from multiprocessing import Process, Queue as MQueue
 
 import six
@@ -73,6 +76,8 @@ from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler
 from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              BatchStatement, bind_params, QueryTrace,
                              named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET)
+
+from cassandra.io_worker import RequestExecutor as DefaultRequestExecutor
 
 
 def _is_eventlet_monkey_patched():
@@ -122,6 +127,8 @@ DEFAULT_MAX_CONNECTIONS_PER_REMOTE_HOST = 2
 
 _NOT_SET = object()
 
+# totaly for test purpose
+requests = {}
 
 class NoHostAvailable(Exception):
     """
@@ -186,10 +193,9 @@ else:
 
 class SessionWorker(Process):
 
-
-    def __init__(self, cluster, **kwargs):
+    def __init__(self, session, **kwargs):
         super(SessionWorker, self).__init__(**kwargs)
-        self.cluster = cluster
+        self.session = session
         self._stop = False
         self.query_queue = MQueue(maxsize=256)
         self.futures = Queue.Queue()
@@ -212,7 +218,6 @@ class SessionWorker(Process):
 
             if self._stop and self.query_queue.empty():
                 self.wait_futures()
-                self.session.shutdown()
                 break
 
     def execute_async(self, query):
@@ -726,7 +731,6 @@ class Cluster(object):
             self.schema_event_refresh_window, self.topology_event_refresh_window,
             schema_metadata_enabled, token_metadata_enabled)
 
-
     def register_user_type(self, keyspace, user_type, klass):
         """
         Registers a class to use to represent a particular user-defined type.
@@ -921,10 +925,6 @@ class Cluster(object):
             else:
                 raise DriverException("Cannot downgrade protocol version (%d) below minimum supported version: %d" % (new_version, MIN_SUPPORTED_VERSION))
 
-    def create_session_worker(self):
-        session_worker = SessionWorker(self)
-        return session_worker
-
     def connect(self, keyspace=None):
         """
         Creates and returns a new :class:`~.Session` object.  If `keyspace`
@@ -962,7 +962,7 @@ class Cluster(object):
 
                 self.load_balancing_policy.check_supported()
 
-                if self.idle_heartbeat_interval:
+                if self.idle_heartbeat_interval and False:
                     self._idle_heartbeat = ConnectionHeartbeat(self.idle_heartbeat_interval, self.get_connection_holders)
                 self._is_setup = True
 
@@ -1642,8 +1642,10 @@ class Session(object):
     When compiled with Cython, there are also built-in faster alternatives. See :ref:`faster_deser`
     """
 
+    request_executor_class = DefaultRequestExecutor
+
+    _request_executor = None
     _lock = None
-    _pools = None
     _load_balancer = None
     _metrics = None
 
@@ -1652,22 +1654,31 @@ class Session(object):
         self.hosts = hosts
 
         self._lock = RLock()
-        self._pools = {}
         self._load_balancer = cluster.load_balancing_policy
         self._metrics = cluster.metrics
         self._protocol_version = self.cluster.protocol_version
 
         self.encoder = Encoder()
 
-        # create connection pools in parallel
-        futures = []
-        for host in hosts:
-            future = self.add_or_renew_pool(host, is_host_addition=False)
-            if future is not None:
-                futures.append(future)
+        # Initialize the request executor
+        self._request_executor = self.request_executor_class(self, ResponseFuture)
 
-        for future in futures:
-            future.result()
+        self.cluster.scheduler.schedule(1, self.check_response_queue, self._request_executor.response_queue)
+
+    def check_response_queue(self, queue):
+        global requests
+        while True:
+            try:
+                request_id = queue.get_nowait()
+                f = requests[request_id]
+                del requests[request_id]
+                f.set_event()
+            except Queue.Empty:
+                break
+            except KeyError:
+                pass  # ummm.
+
+        self.cluster.scheduler.schedule(0.01, self.check_response_queue, queue)
 
     def execute(self, query, parameters=None, timeout=_NOT_SET, trace=False, custom_payload=None):
         """
@@ -1747,9 +1758,12 @@ class Session(object):
         if timeout is _NOT_SET:
             timeout = self.default_timeout
 
+        global requests
         future = self._create_response_future(query, parameters, trace, custom_payload, timeout)
-        future._protocol_handler = self.client_protocol_handler
-        future.send_request()
+        #future._protocol_handler = self.client_protocol_handler
+        self._request_executor.send_request(copy(future))
+        future.init_event()
+        requests[future.id] = future
         return future
 
     def _create_response_future(self, query, parameters, trace, custom_payload, timeout):
@@ -1804,8 +1818,11 @@ class Session(object):
         message.update_custom_payload(query.custom_payload)
         message.update_custom_payload(custom_payload)
 
-        return ResponseFuture(
-            self, message, query, timeout, metrics=self._metrics,
+        #return ResponseFuture(
+        #    self, message, query, timeout, metrics=self._metrics,
+        #    prepared_statement=prepared_statement)
+        return ResponseFutureProxy(
+            message, query, timeout, metrics=self._metrics,
             prepared_statement=prepared_statement)
 
     def prepare(self, query, custom_payload=None):
@@ -1903,45 +1920,7 @@ class Session(object):
             else:
                 self.is_shutdown = True
 
-        for pool in self._pools.values():
-            pool.shutdown()
-
-    def add_or_renew_pool(self, host, is_host_addition):
-        """
-        For internal use only.
-        """
-        distance = self._load_balancer.distance(host)
-        if distance == HostDistance.IGNORED:
-            return None
-
-        def run_add_or_renew_pool():
-            try:
-                if self._protocol_version >= 3:
-                    new_pool = HostConnection(host, distance, self)
-                else:
-                    new_pool = HostConnectionPool(host, distance, self)
-            except AuthenticationFailed as auth_exc:
-                conn_exc = ConnectionException(str(auth_exc), host=host)
-                self.cluster.signal_connection_failure(host, conn_exc, is_host_addition)
-                return False
-            except Exception as conn_exc:
-                log.warning("Failed to create connection pool for new host %s:",
-                            host, exc_info=conn_exc)
-                # the host itself will still be marked down, so we need to pass
-                # a special flag to make sure the reconnector is created
-                self.cluster.signal_connection_failure(
-                    host, conn_exc, is_host_addition, expect_host_to_be_down=True)
-                return False
-
-            previous = self._pools.get(host)
-            self._pools[host] = new_pool
-            log.debug("Added pool for host %s to session", host)
-            if previous:
-                previous.shutdown()
-
-            return True
-
-        return self.submit(run_add_or_renew_pool)
+        self._request_executor.shutdown()
 
     def remove_pool(self, host):
         pool = self._pools.pop(host, None)
@@ -2776,6 +2755,47 @@ def refresh_schema_and_set_result(control_conn, response_future, **kwargs):
         response_future._set_final_result(None)
 
 
+class ResponseFutureProxy(object):
+
+    _event = None
+
+    id = None
+    message = None
+    query = None
+    timeout = None
+    metrics = None
+    prepared_statement = None
+
+    def __init__(self, message, query, timeout, metrics, prepared_statement):
+        self.id = uuid.uuid4()
+        self.message = message
+        self.query = query
+        self.timeout = timeout
+        self.metrics = metrics
+        self.prepared_statement = prepared_statement
+
+    def init_event(self):
+        self._event = Event()
+
+    def set_event(self):
+        self._event.set()
+
+    def result(self):
+        self._event.wait()
+        return True
+
+
+class QueryExhausted(Exception):
+    """
+    Raised when :meth:`.ResponseFuture.start_fetching_next_page()` is called and
+    there are no more pages.  You can check :attr:`.ResponseFuture.has_more_pages`
+    before calling to avoid this.
+
+    .. versionadded:: 2.0.0
+    """
+    pass
+
+
 class ResponseFuture(object):
     """
     An asynchronous response delivery mechanism that is returned from calls
@@ -2829,7 +2849,7 @@ class ResponseFuture(object):
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None):
         self.session = session
-        self.row_factory = session.row_factory
+        self.row_factory = session.session.row_factory
         self.message = message
         self.query = query
         self.timeout = timeout
@@ -2846,7 +2866,7 @@ class ResponseFuture(object):
 
     def _start_timer(self):
         if self.timeout is not None:
-            self._timer = self.session.cluster.connection_class.create_timer(self.timeout, self._on_timeout)
+            self._timer = self.session.session.cluster.connection_class.create_timer(self.timeout, self._on_timeout)
 
     def _cancel_timer(self):
         if self._timer:
@@ -2869,7 +2889,7 @@ class ResponseFuture(object):
         # calls to send_request (which retries may do) will resume where
         # they last left off
         self.query_plan = iter(self.session._load_balancer.make_query_plan(
-            self.session.keyspace, self.query))
+            self.session.session.keyspace, self.query))
 
     def send_request(self):
         """ Internal """
@@ -3031,9 +3051,9 @@ class ResponseFuture(object):
                     # set.  This uses a callback chain which ends with
                     # self._set_keyspace_completed() being called in the
                     # event loop thread.
-                    if session:
-                        session._set_keyspace_for_all_pools(
-                            response.results, self._set_keyspace_completed)
+                    #if session:
+                        #session._set_keyspace_for_all_pools(
+                        #   response.results, self._set_keyspace_completed)
                 elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
@@ -3054,7 +3074,7 @@ class ResponseFuture(object):
                 if self.query:
                     retry_policy = self.query.retry_policy
                 if not retry_policy:
-                    retry_policy = self.session.cluster.default_retry_policy
+                    retry_policy = self.session.session.cluster.default_retry_policy
 
                 if isinstance(response, ReadTimeoutErrorMessage):
                     if self._metrics is not None:
@@ -3432,17 +3452,6 @@ class ResponseFuture(object):
         return "<ResponseFuture: query='%s' request_id=%s result=%s exception=%s host=%s>" \
                % (self.query, self._req_id, result, self._final_exception, self._current_host)
     __repr__ = __str__
-
-
-class QueryExhausted(Exception):
-    """
-    Raised when :meth:`.ResponseFuture.start_fetching_next_page()` is called and
-    there are no more pages.  You can check :attr:`.ResponseFuture.has_more_pages`
-    before calling to avoid this.
-
-    .. versionadded:: 2.0.0
-    """
-    pass
 
 
 class ResultSet(object):

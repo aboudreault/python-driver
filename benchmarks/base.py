@@ -118,7 +118,7 @@ def teardown(options):
 def benchmark(thread_class):
     options, args = parse_options()
     for conn_class in options.supported_reactors:
-        setup(options)
+        #setup(options)
         log.info("==== %s ====" % (conn_class.__name__,))
 
         kwargs = {'metrics_enabled': options.enable_metrics,
@@ -126,7 +126,7 @@ def benchmark(thread_class):
         if options.protocol_version:
             kwargs['protocol_version'] = options.protocol_version
         cluster = Cluster(options.hosts, **kwargs)
-        session = None #cluster.connect(options.keyspace)
+        session = cluster.connect()
 
         log.debug("Sleeping for two seconds...")
         time.sleep(2.0)
@@ -136,7 +136,7 @@ def benchmark(thread_class):
         if options.read:
             query = "SELECT * FROM {}  WHERE thekey = '{{key}}'".format(TABLE)
         else:
-            query = "INSERT INTO {} (thekey".format(TABLE)
+            query = "INSERT INTO testkeyspace.{} (thekey".format(TABLE)
             for i in range(options.num_columns):
                 query += ", col{}".format(i)
 
@@ -167,6 +167,7 @@ def benchmark(thread_class):
                     thread.join(timeout=0.5)
 
             end = time.time()
+            print 'end time: ', end
         finally:
             cluster.shutdown()
             teardown(options)
@@ -275,7 +276,7 @@ class BenchmarkThread(Thread):
             self.profiler.enable()
 
     def run_query(self, key, **kwargs):
-        return self.session.execute_async(self.query.format(key=key), **kwargs)
+        return  self.session.execute_async(self.query.format(key=key), **kwargs)
 
     def finish_profile(self):
         if self.profiler:

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-
+import time
 from base import benchmark, BenchmarkThread
 
 log = logging.getLogger(__name__)
