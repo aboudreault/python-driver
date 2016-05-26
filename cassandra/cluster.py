@@ -32,6 +32,7 @@ from threading import Lock, RLock, Thread, Event
 import warnings
 from copy import copy
 from multiprocessing import Process, Queue as MQueue
+import zmq
 
 import six
 from six.moves import range
@@ -1661,24 +1662,26 @@ class Session(object):
         self.encoder = Encoder()
 
         # Initialize the request executor
-        self._request_executor = self.request_executor_class(self, ResponseFuture)
+        self._request_executor = self.request_executor_class(self, ResponseFutureProxy, ResponseFuture)
 
-        self.cluster.scheduler.schedule(1, self.check_response_queue, self._request_executor.response_queue)
+        #self.cluster.scheduler.schedule(1, self.check_response_queue, self._request_executor.zmq_response_socket)
 
-    def check_response_queue(self, queue):
+    def check_response_queue(self, socket):
         global requests
         while True:
             try:
-                request_id = queue.get_nowait()
+                request_id = socket.recv_pyobj(flags=zmq.NOBLOCK)
                 f = requests[request_id]
                 del requests[request_id]
                 f.set_event()
-            except Queue.Empty:
+            except zmq.ZMQError, e:
+                #for key, value in requests.iteritems():
+                #    print value
                 break
             except KeyError:
                 pass  # ummm.
 
-        self.cluster.scheduler.schedule(0.01, self.check_response_queue, queue)
+        self.cluster.scheduler.schedule(0.01, self.check_response_queue, socket)
 
     def execute(self, query, parameters=None, timeout=_NOT_SET, trace=False, custom_payload=None):
         """
@@ -1758,17 +1761,19 @@ class Session(object):
         if timeout is _NOT_SET:
             timeout = self.default_timeout
 
-        global requests
-        future = self._create_response_future(query, parameters, trace, custom_payload, timeout)
+        #global requests
+        #future = self._create_response_future(query, parameters, trace, custom_payload, timeout)
         #future._protocol_handler = self.client_protocol_handler
-        self._request_executor.send_request(copy(future))
-        future.init_event()
-        requests[future.id] = future
-        return future
+        #future.init_event()
+        #requests[future.id] = future
+        #f2 = copy(future)
+        #f2._event = None
+        return self._request_executor.send_request(query)
 
-    def _create_response_future(self, query, parameters, trace, custom_payload, timeout):
+    def _create_response_future(self, query, parameters, trace, custom_payload, timeout, pools):
         """ Returns the ResponseFuture before calling send_request() on it """
 
+        self._pools = pools
         prepared_statement = None
 
         if isinstance(query, six.string_types):
@@ -1818,11 +1823,8 @@ class Session(object):
         message.update_custom_payload(query.custom_payload)
         message.update_custom_payload(custom_payload)
 
-        #return ResponseFuture(
-        #    self, message, query, timeout, metrics=self._metrics,
-        #    prepared_statement=prepared_statement)
-        return ResponseFutureProxy(
-            message, query, timeout, metrics=self._metrics,
+        return ResponseFuture(
+            self, message, query, timeout, metrics=self._metrics,
             prepared_statement=prepared_statement)
 
     def prepare(self, query, custom_payload=None):
@@ -2758,21 +2760,13 @@ def refresh_schema_and_set_result(control_conn, response_future, **kwargs):
 class ResponseFutureProxy(object):
 
     _event = None
-
     id = None
-    message = None
     query = None
-    timeout = None
-    metrics = None
-    prepared_statement = None
 
-    def __init__(self, message, query, timeout, metrics, prepared_statement):
-        self.id = uuid.uuid4()
-        self.message = message
+
+    def __init__(self, request_id, query):
+        self.id = request_id
         self.query = query
-        self.timeout = timeout
-        self.metrics = metrics
-        self.prepared_statement = prepared_statement
 
     def init_event(self):
         self._event = Event()
@@ -2849,7 +2843,7 @@ class ResponseFuture(object):
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None):
         self.session = session
-        self.row_factory = session.session.row_factory
+        self.row_factory = session.row_factory
         self.message = message
         self.query = query
         self.timeout = timeout
@@ -2866,7 +2860,7 @@ class ResponseFuture(object):
 
     def _start_timer(self):
         if self.timeout is not None:
-            self._timer = self.session.session.cluster.connection_class.create_timer(self.timeout, self._on_timeout)
+            self._timer = self.session.cluster.connection_class.create_timer(self.timeout, self._on_timeout)
 
     def _cancel_timer(self):
         if self._timer:
@@ -2889,7 +2883,7 @@ class ResponseFuture(object):
         # calls to send_request (which retries may do) will resume where
         # they last left off
         self.query_plan = iter(self.session._load_balancer.make_query_plan(
-            self.session.session.keyspace, self.query))
+            self.session.keyspace, self.query))
 
     def send_request(self):
         """ Internal """
@@ -3074,7 +3068,7 @@ class ResponseFuture(object):
                 if self.query:
                     retry_policy = self.query.retry_policy
                 if not retry_policy:
-                    retry_policy = self.session.session.cluster.default_retry_policy
+                    retry_policy = self.session.cluster.default_retry_policy
 
                 if isinstance(response, ReadTimeoutErrorMessage):
                     if self._metrics is not None:

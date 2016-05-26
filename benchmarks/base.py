@@ -37,7 +37,7 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
 log.addHandler(handler)
 
-logging.getLogger('cassandra').setLevel(logging.WARN)
+logging.getLogger('cassandra').setLevel(logging.DEBUG)
 
 have_libev = False
 supported_reactors = [AsyncoreConnection]
@@ -108,6 +108,7 @@ def setup(options):
 
 
 def teardown(options):
+    return
     cluster = Cluster(options.hosts, protocol_version=options.protocol_version)
     session = cluster.connect()
     if not options.keep_data:
@@ -167,7 +168,6 @@ def benchmark(thread_class):
                     thread.join(timeout=0.5)
 
             end = time.time()
-            print 'end time: ', end
         finally:
             cluster.shutdown()
             teardown(options)

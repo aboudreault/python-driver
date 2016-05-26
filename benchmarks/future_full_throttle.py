@@ -25,10 +25,14 @@ class Runner(BenchmarkThread):
 
         self.start_profile()
 
+        start = time.time()
         for i in range(self.num_queries):
             key = "{}-{}".format(self.thread_num, i)
             future = self.run_query(key)
             futures.append(future)
+
+        stop = time.time()
+        print "All requests sent in ", int(stop-start), " seconds"
 
         for future in futures:
             future.result()
