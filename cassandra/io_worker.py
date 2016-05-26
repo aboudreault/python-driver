@@ -21,8 +21,10 @@ import copy
 import logging
 from collections import deque
 
-from multiprocessing import Process, Event
+from multiprocessing import Process, Event, Queue as MQueue
 from threading import Thread, Lock
+
+from six.moves import queue as Queue
 
 from zmq.eventloop import ioloop, zmqstream
 
@@ -41,12 +43,15 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
 log = logging.getLogger(__name__)
 
 
+request_queue = MQueue()
+response_queue = MQueue()
+
 class RequestExecutor(object):
 
     workers = None
     request_queue = None
     response_queue = None
-    num_worker = 6
+    num_worker = 8
     proxy_class = None
 
     request_lock = Lock()
@@ -104,9 +109,6 @@ class RequestExecutor(object):
     def _run_request_loop(self):
         print 'Starting request loop'
 
-        request_socket = self.zmq_context.socket(zmq.PUSH)
-        request_socket.bind("tcp://127.0.0.1:5557")
-
         while True:
             try:
                 with self.deque_lock:
@@ -116,8 +118,8 @@ class RequestExecutor(object):
                 continue
 
             try:
-                request_socket.send_pyobj(obj=next_request, flags=zmq.NOBLOCK)
-            except zmq.ZMQError:
+                request_queue.put_nowait(next_request)
+            except Queue.Full:
                 with self.deque_lock:
                     self.deque.appendleft(next_request)
 
@@ -125,18 +127,19 @@ class RequestExecutor(object):
         print 'Starting response loop'
 
         def on_recv(msg):
-            id = pickle.loads(msg[0])
+            id = msg
             if id in self.requests:  # bah...
                 f = self.requests[id]
                 del self.requests[id]
                 f.set_event()
 
-        response_socket = self.zmq_context.socket(zmq.PULL)
-        response_socket.bind("tcp://127.0.0.1:5558")
-        response_stream = zmqstream.ZMQStream(response_socket)
-        response_stream.on_recv(on_recv)
-
-        ioloop.IOLoop.instance().start()
+        while True:
+            try:
+                response = response_queue.get_nowait()
+                on_recv(response)
+            except Queue.Empty:
+                time.sleep(0.1)
+                continue
 
 
 class RequestIOWorker(Process):
@@ -170,12 +173,6 @@ class RequestIOWorker(Process):
 
         self.connection_class.initialize_reactor()
 
-        self.zmq_context = zmq.Context()
-        self.zmq_request_socket = self.zmq_context.socket(zmq.PULL)
-        self.zmq_request_socket.connect("tcp://127.0.0.1:5557")
-
-        self.zmq_response_socket = self.zmq_context.socket(zmq.PUSH)
-        self.zmq_response_socket.connect("tcp://127.0.0.1:5558")
 
         # create connection pools in parallel
         futures = []
@@ -187,12 +184,13 @@ class RequestIOWorker(Process):
         for future in futures:
             future.result()
 
-        f = True
         while True:
-            request = self.zmq_request_socket.recv_pyobj()
-            if f:
-                self.start = time.time()
-                f = False
+            try:
+                request = request_queue.get_nowait()
+            except Queue.Empty:
+                time.sleep(0.1)
+                continue
+
             if request == 'STOP':
                 self._stop = True
             else:
@@ -203,13 +201,11 @@ class RequestIOWorker(Process):
                 #self.futures.append(future)
 
             if self._stop:
-                self.zmq_request_socket.close()
-                self.zmq_response_socket.close()
                 break
 
     def handle_results(self, rows, id):
         #we should handle response properly
-        self.zmq_response_socket.send_pyobj(obj=id)
+        response_queue.put_nowait(id)
 
     def wait_futures(self):
         while True:
