@@ -21,7 +21,7 @@ import copy
 import logging
 from collections import deque
 
-from multiprocessing import Process, Event, Queue as MQueue
+from multiprocessing import Process, Event, Pipe, Lock as MLock
 from threading import Thread, Lock
 
 from six.moves import queue as Queue
@@ -43,8 +43,14 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
 log = logging.getLogger(__name__)
 
 
-request_queue = MQueue()
-response_queue = MQueue()
+request_reader, request_writer = Pipe(duplex=False)
+request_reader_lock = MLock()
+request_writer_lock = MLock()
+
+response_reader, response_writer = Pipe(duplex=False)
+response_reader_lock = MLock()
+response_writer_lock = MLock()
+
 
 class RequestExecutor(object):
 
@@ -60,6 +66,7 @@ class RequestExecutor(object):
 
     deque = None
     deque_lock = Lock()
+
 
     response_thread = None
 
@@ -118,8 +125,9 @@ class RequestExecutor(object):
                 continue
 
             try:
-                request_queue.put_nowait(next_request)
-            except Queue.Full:
+                with request_writer_lock:
+                    request_writer.send(next_request)
+            except Exception:
                 with self.deque_lock:
                     self.deque.appendleft(next_request)
 
@@ -135,9 +143,10 @@ class RequestExecutor(object):
 
         while True:
             try:
-                response = response_queue.get_nowait()
+                with response_reader_lock:
+                    response = response_reader.recv()
                 on_recv(response)
-            except Queue.Empty:
+            except Exception:
                 time.sleep(0.1)
                 continue
 
@@ -186,8 +195,9 @@ class RequestIOWorker(Process):
 
         while True:
             try:
-                request = request_queue.get_nowait()
-            except Queue.Empty:
+                with request_reader_lock:
+                    request = request_reader.recv()
+            except Exception:
                 time.sleep(0.1)
                 continue
 
@@ -205,7 +215,8 @@ class RequestIOWorker(Process):
 
     def handle_results(self, rows, id):
         #we should handle response properly
-        response_queue.put_nowait(id)
+        with response_writer_lock:
+            response_writer.send(id)
 
     def wait_futures(self):
         while True:
