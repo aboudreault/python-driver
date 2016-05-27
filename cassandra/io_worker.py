@@ -21,7 +21,9 @@ import copy
 import logging
 from collections import deque
 
-from multiprocessing import Process, Event, Queue as MQueue
+from multiprocessing import Process, Event
+from multiprocessing.queues import SimpleQueue as MQueue
+
 from threading import Thread, Lock
 
 from six.moves import queue as Queue
@@ -118,7 +120,7 @@ class RequestExecutor(object):
                 continue
 
             try:
-                request_queue.put_nowait(next_request)
+                request_queue.put(next_request)
             except Queue.Full:
                 with self.deque_lock:
                     self.deque.appendleft(next_request)
@@ -135,7 +137,7 @@ class RequestExecutor(object):
 
         while True:
             try:
-                response = response_queue.get_nowait()
+                response = response_queue.get()
                 on_recv(response)
             except Queue.Empty:
                 time.sleep(0.1)
@@ -186,7 +188,7 @@ class RequestIOWorker(Process):
 
         while True:
             try:
-                request = request_queue.get_nowait()
+                request = request_queue.get()
             except Queue.Empty:
                 time.sleep(0.1)
                 continue
@@ -205,7 +207,7 @@ class RequestIOWorker(Process):
 
     def handle_results(self, rows, id):
         #we should handle response properly
-        response_queue.put_nowait(id)
+        response_queue.put(id)
 
     def wait_futures(self):
         while True:
