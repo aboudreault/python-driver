@@ -15,16 +15,25 @@
 import logging
 import time
 from base import benchmark, BenchmarkThread
+import json
 
 log = logging.getLogger(__name__)
 
-def my_row_parser(request_id):
+def my_row_parser1(request_id):
+    pass
+
+def my_row_parser2(request_id):
     # a totally simple non-logic code for simulation purpose
-    #ids = []
-    #c = 0
-    #ids.append(request_id)  # log the request id received
-    #c+= request_id
-     pass
+    ids = []
+    c = 0
+    ids.append(request_id)  # log the request id received
+    c += request_id
+    json_dict = {'id': request_id, 'c1': 4, 'c2': 5}
+    return json.dumps(json_dict)
+
+
+def my_row_parser3(request_id):
+    time.sleep(0.000001)
 
 
 class Runner(BenchmarkThread):
@@ -38,7 +47,7 @@ class Runner(BenchmarkThread):
         for i in range(self.num_queries):
             key = "{}-{}".format(self.thread_num, i)
             future = self.run_query(key)
-            future.add_callback(my_row_parser)
+            future.add_callback(my_row_parser3)
             futures.append(future)
 
         stop = time.time()
@@ -46,7 +55,6 @@ class Runner(BenchmarkThread):
 
         for future in futures:
             future.result()
-
 
         self.finish_profile()
 
