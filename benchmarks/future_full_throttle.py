@@ -18,6 +18,15 @@ from base import benchmark, BenchmarkThread
 
 log = logging.getLogger(__name__)
 
+def my_row_parser(request_id):
+    # a totally simple non-logic code for simulation purpose
+    #ids = []
+    #c = 0
+    #ids.append(request_id)  # log the request id received
+    #c+= request_id
+     pass
+
+
 class Runner(BenchmarkThread):
 
     def run(self):
@@ -29,6 +38,7 @@ class Runner(BenchmarkThread):
         for i in range(self.num_queries):
             key = "{}-{}".format(self.thread_num, i)
             future = self.run_query(key)
+            future.add_callback(my_row_parser)
             futures.append(future)
 
         stop = time.time()
@@ -36,6 +46,7 @@ class Runner(BenchmarkThread):
 
         for future in futures:
             future.result()
+
 
         self.finish_profile()
 

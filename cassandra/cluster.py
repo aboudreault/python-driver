@@ -2760,6 +2760,7 @@ def refresh_schema_and_set_result(control_conn, response_future, **kwargs):
 class ResponseFutureProxy(object):
 
     _event = None
+    _callbacks = []
     id = None
     query = None
 
@@ -2771,8 +2772,14 @@ class ResponseFutureProxy(object):
     def init_event(self):
         self._event = Event()
 
+    def add_callback(self, fn):
+        self._callbacks.append(fn)
+
     def set_event(self):
         self._event.set()
+
+        for callback in self._callbacks:
+            callback(self.id)
 
     def result(self):
         self._event.wait()
