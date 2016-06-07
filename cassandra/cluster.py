@@ -1657,12 +1657,13 @@ class Session(object):
         self._lock = RLock()
         self._load_balancer = cluster.load_balancing_policy
         self._metrics = cluster.metrics
+
         self._protocol_version = self.cluster.protocol_version
 
         self.encoder = Encoder()
 
         # Initialize the request executor
-        self._request_executor = self.request_executor_class(self, ResponseFutureProxy, ResponseFuture)
+        self._request_executor = self.request_executor_class(self, ResponseFutureProxy, ResponseFuture, metrics=self.cluster.metrics)
 
         #self.cluster.scheduler.schedule(1, self.check_response_queue, self._request_executor.zmq_response_socket)
 
@@ -2763,23 +2764,33 @@ class ResponseFutureProxy(object):
     _callbacks = None
     id = None
     query = None
+    _start_time = None
+    _metrics = None
 
     def __init__(self, request_id, query):
         self.id = request_id
         self.query = query
         self._callbacks = []
 
-    def init_event(self):
+    def init(self, metrics):
+        self._metrics = metrics
+        if self._metrics:
+            self._start_time = time.time()
+
         self._event = Event()
 
     def add_callback(self, fn):
         self._callbacks.append(fn)
 
     def set_event(self):
+        if self._metrics is not None:
+            self._metrics.request_timer.addValue(time.time() - self._start_time)
+
         self._event.set()
 
         for callback in self._callbacks:
             callback(self.id)
+
 
     def result(self):
         self._event.wait()

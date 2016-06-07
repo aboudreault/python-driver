@@ -47,7 +47,7 @@ class Runner(BenchmarkThread):
         for i in range(self.num_queries):
             key = "{}-{}".format(self.thread_num, i)
             future = self.run_query(key)
-            future.add_callback(my_row_parser3)
+            #future.add_callback(my_row_parser3)
             futures.append(future)
 
         stop = time.time()

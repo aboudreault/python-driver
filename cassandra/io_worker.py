@@ -65,12 +65,14 @@ class RequestExecutor(object):
     deque_lock = Lock()
 
     response_thread = None
+    _metrics = None
 
-    def __init__(self, session, proxy_class, future_class):  # import hack
+    def __init__(self, session, proxy_class, future_class, metrics=None):  # import hack
         self.workers = []
         self.proxy_class = proxy_class
         self.deque = deque()
         self.zmq_context = zmq.Context()
+        self._metrics = metrics
 
         self._thread = Thread(target=self._run_request_loop, name="request_event_loop")
         self._thread.daemon = True
@@ -105,7 +107,7 @@ class RequestExecutor(object):
         with self.deque_lock:
             self.deque.append(copy.copy(fp))
 
-        fp.init_event()
+        fp.init(self._metrics)
         self.requests[request_id] = fp
         return fp
 
