@@ -2771,12 +2771,10 @@ class ResponseFutureProxy(object):
         self.id = request_id
         self.query = query
         self._callbacks = []
+        self._start_time = time.time()
 
     def init(self, metrics):
         self._metrics = metrics
-        if self._metrics:
-            self._start_time = time.time()
-
         self._event = Event()
 
     def add_callback(self, fn):
