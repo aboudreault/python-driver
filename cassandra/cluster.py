@@ -28,7 +28,8 @@ import sys
 import time
 from threading import Lock, RLock, Thread, Event
 import warnings
-from multiprocessing import Process, Queue as MQueue
+from multiprocessing import Process
+from multiprocessing.queues import SimpleQueue as MQueue
 
 import six
 from six.moves import range
@@ -186,51 +187,119 @@ else:
 
 class SessionWorker(Process):
 
-
     def __init__(self, cluster, **kwargs):
         super(SessionWorker, self).__init__(**kwargs)
         self.cluster = cluster
         self._stop = False
-        self.query_queue = MQueue(maxsize=256)
-        self.futures = Queue.Queue()
+        self.requests_queue = MQueue()
+        self.responses_queue = MQueue()
+        self.request_lock = Lock()
+        self.request_id = 0
+        self.requests = {}
+        self.c = 0
+
+        self._thread = Thread(target=self._run_response_loop, name="response_event_loop")
+        self._thread.daemon = True
+        self._thread.start()
 
     def run(self):
         self.session = self.cluster.connect()
 
-        time.sleep(2)
+        time.sleep(1)
+
+        def handle_results(rows, id):
+            #we should handle response properly
+            self.responses_queue.put(id)
+
 
         while True:
             try:
-                query = self.query_queue.get_nowait()
-                if query == 'STOP':
+                request = self.requests_queue.get()
+                if request == 'STOP':
                     self._stop = True
                 else:
-                    future = self.session.execute_async(query)
-                    self.futures.put_nowait(future)
+                    future = self.session.execute_async(request.query)
+                    future.add_callback(handle_results, request.id)
+                    future.add_errback(handle_results, request.id)
             except Queue.Empty:
                 time.sleep(1)  # use less cpu
 
-            if self._stop and self.query_queue.empty():
-                self.wait_futures()
+            if self._stop:
                 self.session.shutdown()
                 break
 
     def execute_async(self, query):
-        self.query_queue.put(query)  ## will block if the queue is full, test-purpose due to broken pipe when full throttle
+        with self.request_lock:
+            request_id = self.request_id
+            self.request_id += 1  # test purpose..
+
+        fp = ResponseFutureProxy(request_id, query)
+        with self.request_lock:
+            self.requests_queue.put(fp)
+            fp.init()
+            self.requests[request_id] = fp
+
+        return fp
 
     def stop(self):
-        self.query_queue.put('STOP')  # test purpose
-        self.join()
+        self.requests_queue.put('STOP')  # test purpose
+        #self.join()
 
-    def wait_futures(self):
+
+    def _run_response_loop(self):
+        print 'Starting response loop'
+
+        def on_recv(msg):
+            id = msg
+            with self.request_lock:
+                if id in self.requests:  # bah...
+                    f = self.requests[id]
+                    del self.requests[id]
+                    f.set_event()
+
         while True:
             try:
-                self.futures.get_nowait().result()
+                response = self.responses_queue.get()
+                on_recv(response)
             except Queue.Empty:
-                break
-            except:
-                pass  # ... operationtimeout
+                time.sleep(0.1)
+                continue
 
+
+class ResponseFutureProxy(object):
+
+    _event = None
+    _callbacks = None
+    id = None
+    query = None
+    _start_time = None
+    _metrics = None
+
+    def __init__(self, request_id, query):
+        self.id = request_id
+        self.query = query
+        self._callbacks = []
+        self._start_time = time.time()
+
+    def init(self, metrics=None):
+        self._metrics = metrics
+        self._event = Event()
+
+    def add_callback(self, fn):
+        self._callbacks.append(fn)
+
+    def set_event(self):
+        if self._metrics is not None:
+            self._metrics.request_timer.addValue(time.time() - self._start_time)
+
+        self._event.set()
+
+        for callback in self._callbacks:
+            callback(self.id)
+
+    def result(self):
+        self._event.wait()
+        return True
 
 class Cluster(object):
     """

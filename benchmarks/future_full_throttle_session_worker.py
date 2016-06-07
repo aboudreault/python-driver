@@ -19,6 +19,50 @@ from base import benchmark, BenchmarkThread
 
 log = logging.getLogger(__name__)
 
+def my_row_parser3(request_id):
+    time.sleep(0.000001)
+
+def my_row_parser32(request_id):
+    time.sleep(0.000001)
+
+def my_row_parser33(request_id):
+    time.sleep(0.000001)
+
+def my_row_parser4(request_id):
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+
+def my_row_parser42(request_id):
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+
+def my_row_parser43(request_id):
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
+    time.sleep(0.0000001)
 
 class Runner(BenchmarkThread):
 
@@ -33,7 +77,19 @@ class Runner(BenchmarkThread):
         session_worker.execute_async('USE testkeyspace')
         for i in range(self.num_queries):
             key = "{}-{}".format(self.thread_num, i)
-            session_worker.execute_async(self.query.format(key=key))
+            futures.append(session_worker.execute_async(self.query.format(key=key)))
+            futures[-1].add_callback(my_row_parser4)
+            #futures[-1].add_callback(my_row_parser42)
+            #futures[-1].add_callback(my_row_parser43)
+            #if futures[-1].id > 1250:
+            #    print 'wtf ', futures[-1].id
+
+        c = 0
+        for future in futures:
+            c+=1
+            future.result()
+            #if c == 1250:
+            #    print self.thread_num, ' ', c
 
         session_worker.stop()
         self.finish_profile()
